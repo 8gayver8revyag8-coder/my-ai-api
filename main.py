@@ -1,159 +1,87 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from pydantic import BaseModel
 import requests
-from bs4 import BeautifulSoup
-import uvicorn
-from fastapi.middleware.cors import CORSMiddleware
+import random
 
-app = FastAPI(
-    title="My Cloud AI API",
-    description="Мой первый AI API развернутый в облаке!",
-    version="1.0.0"
-)
-
-# Разрешаем запросы отовсюду
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-class SearchRequest(BaseModel):
-    query: str
-    max_results: int = 3
-
-class ParseRequest(BaseModel):
-    url: str
+app = FastAPI(title="Smart AI API", version="2.0")
 
 class ChatRequest(BaseModel):
     message: str
 
-@app.get("/")
-def read_root():
+def get_ai_response(user_input):
+    """Получаем ответ от настоящего AI через Hugging Face"""
+    try:
+        # Используем бесплатную AI модель от Microsoft
+        API_URL = "https://api-inference.huggingface.co/models/microsoft/DialoGPT-medium"
+        
+        payload = {
+            "inputs": user_input,
+            "parameters": {
+                "max_length": 500,
+                "temperature": 0.7,
+                "do_sample": True
+            },
+            "options": {
+                "wait_for_model": True  # Ждем если модель загружается
+            }
+        }
+        
+        response = requests.post(API_URL, json=payload, timeout=30)
+        
+        if response.status_code == 200:
+            result = response.json()
+            if isinstance(result, list) and len(result) > 0:
+                return result[0]['generated_text']
+            else:
+                return "Извините, не получилось обработать запрос"
+        else:
+            return f"AI временно недоступен (код: {response.status_code})"
+            
+    except Exception as e:
+        return f"Ошибка соединения с AI: {str(e)}"
+
+@app.post("/smart-chat")
+async def smart_chat(request: ChatRequest):
+    """Умный чат с настоящим AI"""
+    user_input = request.message
+    
+    print(f"💬 Получен запрос: {user_input}")
+    
+    ai_response = get_ai_response(user_input)
+    
     return {
-        "message": "🚀 Мой AI API работает!",
-        "status": "active", 
-        "version": "1.0",
-        "endpoints": {
-            "GET /": "Эта страница",
-            "POST /search": "Поиск в интернете",
-            "POST /parse": "Парсинг сайта", 
-            "POST /chat": "Общение с AI",
-            "GET /health": "Проверка здоровья API"
-        }
+        "user_message": user_input,
+        "ai_response": ai_response,
+        "source": "HuggingFace AI",
+        "model": "microsoft/DialoGPT-medium"
     }
-
-@app.post("/search")
-async def search_web(request: SearchRequest):
-    """Поиск информации в интернете через DuckDuckGo"""
-    try:
-        print(f"🔍 Поиск: {request.query}")
-        
-        search_url = "https://api.duckduckgo.com/"
-        params = {
-            'q': request.query,
-            'format': 'json',
-            'no_html': '1',
-            'skip_disambig': '1'
-        }
-        
-        response = requests.get(search_url, params=params, timeout=10)
-        data = response.json()
-        
-        # Формируем ответ
-        result = {
-            "query": request.query,
-            "abstract": data.get('AbstractText', 'Информация не найдена'),
-            "source": data.get('AbstractSource', 'DuckDuckGo'),
-            "url": data.get('AbstractURL', ''),
-            "related_topics": []
-        }
-        
-        # Добавляем связанные темы
-        for topic in data.get('RelatedTopics', [])[:request.max_results]:
-            if 'Text' in topic:
-                result["related_topics"].append(topic['Text'])
-        
-        return {
-            "status": "success",
-            "data": result
-        }
-        
-    except Exception as e:
-        print(f"❌ Ошибка поиска: {e}")
-        raise HTTPException(status_code=500, detail=f"Ошибка при поиске: {str(e)}")
-
-@app.post("/parse")
-async def parse_website(request: ParseRequest):
-    """Парсинг содержимого веб-страницы"""
-    try:
-        print(f"🌐 Парсим URL: {request.url}")
-        
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
-        
-        response = requests.get(request.url, headers=headers, timeout=15)
-        soup = BeautifulSoup(response.content, 'html.parser')
-        
-        # Извлекаем заголовок
-        title = soup.find('title')
-        title_text = title.text.strip() if title else "Заголовок не найден"
-        
-        # Извлекаем основной текст
-        paragraphs = soup.find_all('p')[:3]
-        text_content = " ".join([p.get_text().strip() for p in paragraphs if p.get_text().strip()])
-        
-        result = {
-            "url": request.url,
-            "title": title_text,
-            "content_preview": text_content[:300] + "..." if len(text_content) > 300 else text_content,
-            "status": "success"
-        }
-        
-        return result
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Ошибка парсинга: {str(e)}")
 
 @app.post("/chat")
-async def chat_with_ai(request: ChatRequest):
-    """Простой AI чат-бот"""
-    user_message = request.message.lower().strip()
-    
-    print(f"💬 Чат запрос: {user_message}")
-    
-    # База знаний AI
-    responses = {
-        "привет": "Привет! Я твой AI помощник! ☁️",
-        "как дела": "Отлично! Работаю в облаке!",
-        "что ты умеешь": "Искать информацию, парсить сайты и общаться!",
-        "погода": "Используй /search для поиска погоды",
-        "новости": "Используй endpoint /search для новостей!",
-    }
-    
-    ai_response = responses.get(user_message, f"Я получил: '{request.message}'. Используй /search для поиска информации!")
-    
+async def simple_chat(request: ChatRequest):
+    """Простой чат для обратной совместимости"""
+    return await smart_chat(request)
+
+@app.get("/")
+def home():
     return {
-        "user_message": request.message,
-        "ai_response": ai_response
+        "message": "🚀 Умный AI API работает!",
+        "version": "2.0",
+        "endpoints": {
+            "POST /smart-chat": "Настоящий AI через Hugging Face",
+            "POST /chat": "Простой чат",
+            "GET /": "Эта страница"
+        }
     }
 
 @app.get("/health")
 def health_check():
-    """Проверка здоровья API"""
     return {
-        "status": "healthy",
-        "message": "✅ Все системы работают нормально!"
+        "status": "healthy", 
+        "service": "Smart AI API",
+        "ai_provider": "Hugging Face",
+        "model": "DialoGPT-medium"
     }
 
-# ЗАПУСК СЕРВЕРА - УПРОЩЕННАЯ ВЕРСИЯ
 if __name__ == "__main__":
-    print("🚀 Запуск AI API сервера...")
-    print("📍 Адрес: http://localhost:8000")
-    print("📚 Документация: http://localhost:8000/docs")
-    print("🛑 Остановка: Ctrl+C")
-    
-    # Простой запуск без reload
+    import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
